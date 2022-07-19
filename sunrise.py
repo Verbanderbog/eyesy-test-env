@@ -6,12 +6,12 @@ import math
 
 
 def setup(screen,etc) :
-    global star_points, hill_points, slow, last_peak
+    global star_points, audio_points, slow, last_peak
     star_points = [[0,0,time.time(),1,0,0]]
-    hill_points = [[(etc.xres, etc.yres), (0, etc.yres)], [(etc.xres, etc.yres), (0, etc.yres)], [(etc.xres, etc.yres), (0, etc.yres)]]
+    audio_points = [[],[],[]]
     slow = 0
     last_peak = 0
-    
+
 def audio_peak(etc):
     a = etc.audio_in
     peak = 0
@@ -46,7 +46,8 @@ def plot_sun(etc, center_point, n, t, invert, inner_radius, middle_radius, outer
         outer_radius = middle_radius
     center_point = list(center_point)
     angle = 0
-
+    if inner_radius>etc.xres*7/10:
+        return points
     for i in range(n*2):
         if i % 2 == 0:
             r = outer_radius
@@ -54,8 +55,11 @@ def plot_sun(etc, center_point, n, t, invert, inner_radius, middle_radius, outer
             r = inner_radius
         if i % 4 == 0:
             r = middle_radius
+
         angle = i * (360/(2*n))+math.sin(t/2)*invert*5
         point=(math.cos(math.radians(angle)) * r + center_point[0], math.sin(math.radians(angle)) * r + center_point[1])
+        if point[0]>etc.xres*1.25 or point[0]<etc.xres*-0.25 or point[1]>etc.yres*1.25 or point[1]<etc.yres*-0.25:
+            continue
         points.append(point)
     return points
 
@@ -73,19 +77,29 @@ def color_sun(etc,i):
             b = math.sin(c * 8 * math.pi) * .5 + .5
             color = (r * 170+85, g * 170+85, b * 170+85)
 
-        if c > .98:
+        if c > .95:
+            color = (int(127 + 127 * math.sin((30) * (1 + .01) + time.time())),
+                     int(127 + 127 * math.sin((30) * (.5 + .005) + time.time())),
+                     int(127 + 127 * math.sin((15) * (.1 + .001) + time.time())))
+        if c >.99:
             color = (255, 255, 255)
     return color
 
 def draw_suns(screen, etc):
-    radius = etc.yres/1.25 - 10
+    radius = etc.yres/(etc.knob3/2+1.25) - 10
     t=time.time()
     invert=1
     center_point = (etc.xres/2-(etc.knob1-0.5)*etc.xres*1.5, etc.yres*7/10-(etc.knob2-0.5)*etc.yres*2)
-    for i in range(7):
+    skip=False
+    for i in range(5):
         if i % 2 == 0:
             invert = -1*invert
-        pygame.draw.polygon(screen,color_sun(etc,i),plot_sun(etc, center_point, 30, t, invert, radius-(audio_transform(etc,1)[0][1] * etc.yres/299999), radius+radius/12+(audio_peak(etc) * etc.yres/999999)))
+        if radius<etc.xres*7/10 and not skip:
+            sun=plot_sun(etc, center_point, 30, t, invert, radius-(audio_transform(etc,1)[0][1] * etc.yres/299999), radius+radius/12+(audio_peak(etc) * etc.yres/999999))
+            if len(sun)>2:
+                pygame.draw.polygon(screen,color_sun(etc,i),sun)
+        else:
+            skip = not skip
         radius -= etc.yres / 10
         if i % 2 == 1:
             radius -= etc.yres / 50
@@ -150,7 +164,7 @@ def draw_stars(screen, etc):
             mod = 8-(star_points[i][5]-8)
         if v < 0.2:
             color = color_fade(color_sun(etc, 0),etc.bg_color,v/0.2)
-        pygame.draw.polygon(screen,color,plot_star(etc,(star_points[i][0],star_points[i][1]),6,time.time(),star_points[i][3],3,3 + mod,3 + (mod*0.7)))
+        pygame.draw.polygon(screen,color,plot_star(etc,(star_points[i][0],star_points[i][1]),6,time.time(),star_points[i][3],3 + etc.knob3*3,3 + etc.knob3*12 + mod,3 + etc.knob3*9 + (mod*0.7)))
 
     while star_points[0][0] < 0:
         star_points.pop(0)
@@ -173,7 +187,11 @@ def color_hill(etc, reduce_brightness):
         g = math.sin(c * 4 * math.pi) * .5 + .5
         b = math.sin(c * 8 * math.pi) * .5 + .5
         color = (r * 150 + 105 - reduce_brightness, g * 150 + 105 - reduce_brightness, b * 150 + 105 - reduce_brightness)
-    if c > .98:
+    if c > 0.95:
+        color = (int(185 + 70 * math.sin((30) * (1 + .01) + time.time()))- reduce_brightness,
+                 int(185 + 70 * math.sin((30) * (.5  + .005) + time.time()))- reduce_brightness,
+                 int(185 + 70 * math.sin((15) * (.1  + .001) + time.time()))- reduce_brightness)
+    if c > .99:
         color = (255- reduce_brightness, 255- reduce_brightness, 255- reduce_brightness)
     if v<0.5:
         color = list(color)
@@ -185,30 +203,42 @@ def color_hill(etc, reduce_brightness):
 
     return color
 
-def draw_hill(screen, etc, hill, color, height, offset, period, amplitude, ):
-    global hill_points, slow
+def draw_hill(screen, etc, hill, color, height, offset, period, amplitude):
+    global audio_points, slow
 
-    line_length = etc.xres/50
-    if len(hill_points[hill]) > 2:
-        if slow < 2:
-            pygame.draw.polygon(screen, color, hill_points[hill])
-            return
-        for i in range(2, len(hill_points[hill])-1):
-            hill_points[hill][i]=(hill_points[hill][i][0], hill_points[hill][i+1][1])
-        hill_points[hill].pop()
+    divisions=50
+
+    line_length = etc.xres/divisions
+    if period == 0:
+        period = 1
+    while len(audio_points[hill]) < divisions+1:
+        audio_points[hill].append([period, amplitude])
+    audio_points[hill].append([period, amplitude])
+    #if len(audio_points[hill]) > 2:
+        #slower = 2 if float(etc.knob2) < 0.2 or float(etc.knob2) > 0.85 or float(etc.knob1) > 0.85 or float(etc.knob1) < 0.25 else 0
+        #if slow < 2+slower:
+            #pygame.draw.polygon(screen, color, audio_points[hill])
+            #return
+        #for i in range(2, len(audio_points[hill]) - 1):
+            #audio_points[hill][i]=(audio_points[hill][i][0], audio_points[hill][i + 1][1])
+        #audio_points[hill].pop()
+    audio_points[hill].pop()
+
+    points = [(etc.xres, etc.yres), (0, etc.yres)]
     #(etc.audio_in[int(i*100/((etc.xres/line_length)+1))] / 30000)+
-    while hill_points[hill][-1][0] < etc.xres:
-        hill_points[hill].append(((len(hill_points[hill])-2) * line_length, (math.sin((time.time()*5 + offset + ((len(hill_points[hill])-2) * line_length) / (etc.xres / period))/2 )* amplitude + height)))
-    #for i in range(int(etc.xres/line_length)+1):
-        #points.append((i*line_length,math.sin(time.time()+offset+(i*line_length)/(etc.xres/period))*amplitude+height))
-    pygame.draw.polygon(screen,color,hill_points[hill])
+    #while audio_points[hill][-1][0] < etc.xres:
+        #audio_points[hill].append(((len(audio_points[hill]) - 2) * line_length, (math.sin((time.time() * 5 + offset + ((len(audio_points[hill]) - 2) * line_length) / (etc.xres / period)) / 2) * amplitude + height)))
+    for i in range(divisions+1):
+        points.append((i*line_length, math.sin(time.time()+offset+(i*line_length)/(etc.xres/audio_points[hill][i][0]))*audio_points[hill][i][1]+height+etc.audio_in[int((i/(divisions+1))*100)]/999))
+    pygame.draw.polygon(screen, color, points)
 
 
 def draw_hills(screen, etc):
     global slow
-    slow += 1
-    if slow == 3:
-        slow = 0
+    #slow += 1
+    #slower = 2 if float(etc.knob2) < 0.2 or float(etc.knob2) > 0.85 or float(etc.knob1) > 0.85 or float(etc.knob1) < 0.25 else 0
+    #if slow >= 3+slower:
+        #slow = 0
     transform = audio_transform(etc,3)
     draw_hill(screen, etc,0, color_hill(etc,0), etc.yres - etc.yres * 3 / 10, 0, (transform[0][0]+1)*20/399999, 50+transform[0][1]/9999)
     draw_hill(screen, etc,1, color_hill(etc,30), etc.yres - etc.yres * 2 / 10, math.pi, (transform[1][0]+1)*15/399999, 45+transform[1][1]/9999)
